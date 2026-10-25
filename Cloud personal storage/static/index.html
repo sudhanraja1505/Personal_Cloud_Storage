@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Cloud Storage</title>
+<style>
+:root{--bg:#f5f7fa;--card:#fff;--ink:#1a2330;--mute:#617085;--line:#dde3ea;--acc:#2858d6;--bad:#b3261e;--sel:#e6edfc}
+@media(prefers-color-scheme:dark){:root{--bg:#111720;--card:#19212c;--ink:#e6ecf3;--mute:#93a1b4;--line:#2b3644;--acc:#7ea2ff;--bad:#ff8a80;--sel:#1f2d4a}}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--line)}
+main{max-width:900px;margin:24px auto;padding:0 16px}h1{font-size:1.2rem;margin:0}h2{font-size:1.15rem;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:14px}
+input{width:100%;padding:9px;margin:4px 0 12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+button{padding:7px 12px;border:0;border-radius:6px;background:var(--acc);color:#fff;font:inherit;cursor:pointer}
+button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)}button.bad{background:transparent;color:var(--bad);border:1px solid var(--bad)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.drop{border:2px dashed var(--line);border-radius:8px;padding:24px;text-align:center;color:var(--mute)}
+.drop.over{border-color:var(--acc);background:var(--sel)}.drop input{display:none}
+.bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden;margin:6px 0}.bar div{height:100%;background:var(--acc)}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+td.act{text-align:right;white-space:nowrap}td.act button{margin-left:4px}.mute{color:var(--mute);font-size:.9rem}.err{color:var(--bad);min-height:1.4em}
+.auth{max-width:400px;margin:60px auto}.tag{font-size:.8rem;padding:1px 8px;border:1px solid var(--line);border-radius:99px}
+@media(max-width:640px){td.act{white-space:normal}}
+</style></head><body>
+<header><h1>My Cloud Storage</h1><div id="who"></div></header>
+<main id="app"></main>
+<script>
+const $ = s => document.querySelector(s);
+let session = JSON.parse(localStorage.getItem("session") || "null"), query = "";
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const size = b => b < 1024 ? b + " B" : b < 1048576 ? (b/1024).toFixed(1) + " KB" : (b/1048576).toFixed(1) + " MB";
+const when = iso => new Date(iso).toLocaleString([], {dateStyle: "medium", timeStyle: "short"});
+
+async function api(path, opts = {}) {
+  opts.headers = {...(session ? {Authorization: "Bearer " + session.token} : {})};
+  if (opts.json !== undefined) { opts.body = JSON.stringify(opts.json); opts.headers["Content-Type"] = "application/json"; opts.method = opts.method || "POST"; }
+  const r = await fetch("/api" + path, opts);
+  if (opts.raw && r.ok) return r;
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && session) logout();
+  if (!r.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+function logout() { session = null; localStorage.removeItem("session"); render(); }
+function setSession(d) { session = d; localStorage.setItem("session", JSON.stringify(d)); render(); }
+function render() {
+  $("#who").innerHTML = session ? `${esc(session.name)} <button class="ghost" onclick="logout()">Sign out</button>` : "";
+  session ? renderFiles() : renderAuth();
+}
+
+function renderAuth() {
+  let reg = false;
+  $("#app").innerHTML = `<div class="card auth"><h2 id="t"></h2><label id="nl">Full name<input id="name"></label>
+  <label>Email<input id="email" type="email"></label><label>Password<input id="pw" type="password"></label>
+  <div class="err" id="err"></div><button id="go"></button> <button class="ghost" id="sw"></button></div>`;
+  const sync = () => {
+    $("#t").textContent = reg ? "Create an account" : "Sign in";
+    $("#go").textContent = reg ? "Create account" : "Sign in";
+    $("#sw").textContent = reg ? "I already have an account" : "Create an account";
+    $("#nl").style.display = reg ? "" : "none";
+  };
+  $("#sw").onclick = () => { reg = !reg; sync(); };
+  $("#go").onclick = async () => {
+    try {
+      const body = {email: $("#email").value, password: $("#pw").value};
+      if (reg) body.name = $("#name").value;
+      setSession(await api(reg ? "/register" : "/login", {json: body}));
+    } catch (e) { $("#err").textContent = e.message; }
+  };
+  sync();
+}
+
+async function renderFiles(msg = "") {
+  const d = await api("/files?q=" + encodeURIComponent(query));
+  const pct = Math.min(100, d.used / d.quota * 100);
+  $("#app").innerHTML = `<div class="card"><label class="drop" id="drop">Drag files here or click to choose
+    <input type="file" id="pick" multiple></label><div class="err" id="msg">${esc(msg)}</div>
+    <div class="bar"><div style="width:${pct}%"></div></div><div class="mute">${size(d.used)} of ${size(d.quota)} used</div></div>
+    <div class="card"><input id="q" placeholder="Search your files" value="${esc(query)}">` +
+    (d.files.length ? `<table><tr><th>Name</th><th>Size</th><th>Uploaded</th><th></th></tr>` + d.files.map(f => `<tr>
+      <td>${esc(f.name)} ${f.share_token ? '<span class="tag">shared</span>' : ""}</td><td>${size(f.size)}</td><td class="mute">${when(f.uploaded_at)}</td>
+      <td class="act"><button class="ghost" onclick="dl(${f.id},'${esc(f.name).replace(/'/g, "\\'")}')">Download</button>
+      <button class="ghost" onclick="ren(${f.id},'${esc(f.name).replace(/'/g, "\\'")}')">Rename</button>
+      ${f.share_token ? `<button class="ghost" onclick="copyLink('${f.share_token}')">Copy link</button><button class="ghost" onclick="unshare(${f.id})">Stop sharing</button>`
+        : `<button class="ghost" onclick="shareIt(${f.id})">Share</button>`}
+      <button class="bad" onclick="del(${f.id})">Delete</button></td></tr>`).join("") + `</table>`
+      : `<p class="mute">${query ? "No files match your search." : "No files yet. Drop a file above to upload it."}</p>`) + `</div>`;
+  const drop = $("#drop"), pick = $("#pick");
+  pick.onchange = () => upload(pick.files);
+  ["dragover", "dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", ev => upload(ev.dataTransfer.files));
+  let t; $("#q").oninput = e => { clearTimeout(t); t = setTimeout(() => { query = e.target.value; renderFiles(); }, 300); };
+  if (query) { const q = $("#q"); q.focus(); q.setSelectionRange(query.length, query.length); }
+}
+async function upload(list) {
+  const fd = new FormData(); [...list].forEach(f => fd.append("files", f));
+  $("#msg").textContent = "Uploading...";
+  try {
+    const r = await api("/files", {method: "POST", body: fd});
+    renderFiles(r.skipped.length ? "Skipped: " + r.skipped.join(", ") : "");
+  } catch (e) { $("#msg").textContent = e.message; }
+}
+async function dl(id, name) {
+  const r = await api(`/files/${id}/download`, {raw: true});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click();
+}
+async function ren(id, old) {
+  const n = prompt("New file name", old); if (!n || n === old) return;
+  try { await api(`/files/${id}`, {method: "PATCH", json: {name: n}}); renderFiles(); } catch (e) { alert(e.message); }
+}
+async function del(id) { if (confirm("Delete this file permanently?")) { await api(`/files/${id}`, {method: "DELETE"}); renderFiles(); } }
+async function shareIt(id) {
+  const days = prompt("Link expires after how many days? Leave empty for no expiry.", "7");
+  if (days === null) return;
+  const r = await api(`/files/${id}/share`, {json: {days: days ? Number(days) : null}});
+  await copyLink(r.token); renderFiles("Link copied to your clipboard.");
+}
+async function unshare(id) { await api(`/files/${id}/share`, {method: "DELETE"}); renderFiles(); }
+async function copyLink(tok) {
+  const url = location.origin + "/s/" + tok;
+  try { await navigator.clipboard.writeText(url); } catch { prompt("Copy this link", url); }
+}
+render();
+</script></body></html>
